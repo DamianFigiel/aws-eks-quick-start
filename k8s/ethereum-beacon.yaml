@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: beacon-chain
+  namespace: ethereum
+  labels:
+    app: beacon-chain
+    component: ethereum
+spec:
+  serviceName: beacon-chain
+  replicas: 1
+  selector:
+    matchLabels:
+      app: beacon-chain
+  template:
+    metadata:
+      labels:
+        app: beacon-chain
+        component: ethereum
+    spec:
+      nodeSelector:
+        WorkloadType: ethereum
+      tolerations:
+      - key: "ethereum"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      containers:
+      - name: beacon-chain
+        image: gcr.io/prysmaticlabs/prysm/beacon-chain:stable
+        ports:
+        - containerPort: 4000
+          name: grpc
+        - containerPort: 13000
+          name: p2p-tcp
+          protocol: TCP
+        - containerPort: 12000
+          name: p2p-udp
+          protocol: UDP
+        args:
+        - --datadir=/data
+        - --rpc-host=0.0.0.0
+        - --monitoring-host=0.0.0.0
+        - --http-web3provider=http://execution-client:8545
+        - --genesis-state=/config/genesis.ssz
+        - --chain-config-file=/config/config.yml
+        - --accept-terms-of-use
+        - --jwt-secret=/secrets/jwt.hex
+        - --suggested-fee-recipient=0x0000000000000000000000000000000000000000
+        - --min-sync-peers=1
+        - --verbosity=info
+        volumeMounts:
+        - name: beacon-data
+          mountPath: /data
+        - name: config-volume
+          mountPath: /config
+        - name: jwt-secret
+          mountPath: /secrets
+          readOnly: true
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "1000m"
+          limits:
+            memory: "8Gi"
+            cpu: "2000m"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: ethereum-config
+      - name: jwt-secret
+        secret:
+          secretName: jwt-secret
+  volumeClaimTemplates:
+  - metadata:
+      name: beacon-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 100Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: beacon-chain
+  namespace: ethereum
+  labels:
+    app: beacon-chain
+spec:
+  selector:
+    app: beacon-chain
+  ports:
+  - name: grpc
+    port: 4000
+    targetPort: 4000
+  - name: p2p-tcp
+    port: 13000
+    targetPort: 13000
+    protocol: TCP
+  - name: p2p-udp
+    port: 12000
+    targetPort: 12000
+    protocol: UDP
+  type: ClusterIP

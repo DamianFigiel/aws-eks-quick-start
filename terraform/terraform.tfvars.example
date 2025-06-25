@@ -1,0 +1,21 @@
+aws_region = "us-west-2"
+cluster_name = "phylax-rollup"
+cluster_version = "1.28"
+
+node_group_instance_types = ["m6i.xlarge", "m5.xlarge", "m5n.xlarge"]
+min_size = 2
+max_size = 10
+desired_size = 3
+
+common_tags = {
+  Environment = "production"
+  Project     = "phylax-rollup"
+  ManagedBy   = "terraform"
+  Owner       = "platform-team"
+}
+
+enable_irsa = true
+enable_cluster_autoscaler = true
+enable_aws_load_balancer_controller = true
+enable_ebs_csi_driver = true
+enable_monitoring = true
