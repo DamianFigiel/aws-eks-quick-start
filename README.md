@@ -2,7 +2,54 @@
 
 A production-ready, high-availability Ethereum rollup infrastructure deployed on AWS EKS using Terraform and Kubernetes.
 
+💰 **Estimated Monthly Cost**: ~$850-1200 (3x m6i.xlarge @ $140/mo + 2x m6i.2xlarge @ $280/mo + EKS @ $73/mo + NAT Gateways @ $90/mo + EBS storage @ $100/mo)
+
 ## 🏗️ Architecture
+
+### ASCII Architecture Diagram
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                   Internet                                  │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                        ┌──────────────┴──────────────┐
+                        │    ALB/NLB Load Balancer    │
+                        │   (RPC External Access)     │
+                        └──────────────┬──────────────┘
+                                       │
+┌──────────────────────────────────────┴──────────────────────────────────────┐
+│                              AWS VPC (10.0.0.0/16)                          │
+│  ┌────────────────────────────┐    │    ┌────────────────────────────────┐  │
+│  │    Public Subnet (AZ-a)    │    │    │    Public Subnet (AZ-b)        │  │
+│  │      NAT Gateway           │◄───┼───►│      NAT Gateway               │  │
+│  └────────────┬───────────────┘    │    └────────────┬───────────────────┘  │
+│               │                    │                 │                      │
+│  ┌────────────┴───────────────┐    │    ┌────────────┴───────────────────┐  │
+│  │   Private Subnet (AZ-a)    │    │    │   Private Subnet (AZ-b)        │  │
+│  │                            │    │    │                                │  │
+│  │  ┌──────────────────────┐  │    │    │  ┌──────────────────────────┐  │  │
+│  │  │   EKS Node Group 1   │  │◄───┼───►│  │   EKS Node Group 2       │  │  │
+│  │  │                      │  │    │    │  │                          │  │  │
+│  │  │ ┌──────────────────┐ │  │    │    │  │ ┌──────────────────────┐ │  │  │
+│  │  │ │  Ethereum L1     │ │  │    │    │  │ │  Rollup L2           │ │  │  │
+│  │  │ │  - Geth (exec)   │ │  │    │    │  │ │  - OP-Geth           │ │  │  │
+│  │  │ │  - Prysm (cons)  │ │  │    │    │  │ │  - OP-Node           │ │  │  │
+│  │  │ └──────────────────┘ │  │    │    │  │ └──────────────────────┘ │  │  │
+│  │  │                      │  │    │    │  │                          │  │  │
+│  │  │ ┌──────────────────┐ │  │    │    │  │ ┌──────────────────────┐ │  │  │
+│  │  │ │   Monitoring     │ │  │    │    │  │ │   Add-ons            │ │  │  │
+│  │  │ │  - Prometheus    │ │  │    │    │  │ │  - AWS LB Controller │ │  │  │
+│  │  │ │  - Grafana       │ │  │    │    │  │ │  - Cluster Autoscaler│ │  │  │
+│  │  │ └──────────────────┘ │  │    │    │  │ └──────────────────────┘ │  │  │
+│  │  └──────────────────────┘  │    │    │  └──────────────────────────┘  │  │
+│  └────────────────────────────┘    │    └────────────────────────────────┘  │
+│                                    │                                        │
+│  ┌─────────────────────────────────┴─────────────────────────────────────┐  │
+│  │                         Persistent Storage (EBS)                      │  │
+│  │  - Blockchain Data     - Prometheus Metrics     - Logs                │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 This infrastructure deploys a complete Ethereum rollup stack including:
 
@@ -24,9 +71,14 @@ This infrastructure deploys a complete Ethereum rollup stack including:
 
 ### Required Tools
 - [Terraform](https://terraform.io/) >= 1.0
-- [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/) >= 1.33
 - [AWS CLI](https://aws.amazon.com/cli/) >= 2.0
 - [Helm](https://helm.sh/) >= 3.0
+
+```bash
+# To verify if all is installed do:
+make install-check
+```
 
 ### AWS Configuration
 ```bash
@@ -39,7 +91,7 @@ aws configure
 ### 1. Clone and Configure
 ```bash
 git clone <repository-url>
-cd phylax-rollup-infrastructure
+cd phylax
 
 # Copy and customize variables
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
@@ -48,11 +100,13 @@ cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 
 ### 2. Deploy Infrastructure
 ```bash
-# Make scripts executable
-chmod +x scripts/*.sh
+# Option A: Using the deployment script (recommended)
+make deploy
 
-# Deploy everything
-./scripts/deploy.sh
+# Option B: Manual Terraform deployment
+cd terraform
+terraform init
+terraform apply
 ```
 
 ### 3. Access Services
@@ -74,7 +128,8 @@ kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
 │   ├── vpc.tf              # VPC and networking
 │   ├── eks.tf              # EKS cluster configuration
 │   ├── iam.tf              # IAM roles and policies
-│   └── addons.tf           # EKS add-ons and Helm charts
+│   ├── addons.tf           # EKS add-ons and Helm charts
+│   └── cluster-auth.tf     # EKS access entries
 ├── k8s/                    # Kubernetes manifests
 │   ├── namespaces.yaml     # Kubernetes namespaces
 │   ├── configmaps.yaml     # Configuration data
@@ -83,11 +138,19 @@ kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
 │   ├── ethereum-beacon.yaml    # L1 consensus client
 │   ├── op-geth.yaml        # L2 execution engine
 │   ├── op-node.yaml        # L2 rollup node
-│   └── monitoring.yaml     # Monitoring configuration
+│   ├── monitoring.yaml     # Monitoring configuration
+│   └── addons/             # Helm chart values
+│       ├── aws-load-balancer-controller-values.yaml
+│       ├── cluster-autoscaler-values.yaml
+│       ├── prometheus-values.yaml
+│       └── install-addons.sh
 ├── scripts/                # Deployment automation
 │   ├── deploy.sh           # Full deployment script
 │   └── destroy.sh          # Cleanup script
-└── README.md               # This file
+├── ARCHITECTURE.md         # Technical design decisions
+├── RUNBOOK.md             # Operational procedures for health checks, restarts, and troubleshooting
+├── TASK_SUMMARY.md        # Project overview
+└── README.md              # This file
 ```
 
 ## 🔧 Configuration
@@ -98,7 +161,7 @@ Key variables in `terraform/terraform.tfvars`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `aws_region` | AWS region for deployment | `us-west-2` |
+| `aws_region` | AWS region for deployment | `eu-west-1` |
 | `cluster_name` | EKS cluster name | `phylax-rollup` |
 | `cluster_version` | Kubernetes version | `1.28` |
 | `node_group_instance_types` | EC2 instance types | `["m6i.xlarge", "m5.xlarge"]` |
@@ -215,28 +278,18 @@ To destroy all infrastructure:
 
 ```bash
 ./scripts/destroy.sh
+
+# or
+make destroy
 ```
 
 **⚠️ Warning**: This will permanently delete all data and resources!
 
-## 🤝 Contributing
+## 📚 Additional Documentation
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
-## 🆘 Support
-
-For issues and questions:
-1. Check the troubleshooting section
-2. Review Kubernetes and AWS EKS documentation
-3. Open an issue with detailed logs and configuration
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Detailed technical architecture, monitoring strategy, and performance optimization
+- **[RUNBOOK.md](./RUNBOOK.md)** - Operational procedures for health checks, restarts, and troubleshooting
+- **[TASK_SUMMARY.md](./TASK_SUMMARY.md)** - Overview of the platform engineering assessment
 
 ## 🔗 References
 
@@ -244,3 +297,6 @@ For issues and questions:
 - [AWS EKS Best Practices](https://aws.github.io/aws-eks-best-practices/)
 - [Ethereum Node Setup](https://ethereum.org/en/developers/docs/nodes-and-clients/)
 - [Kubernetes Production Best Practices](https://kubernetes.io/docs/concepts/configuration/overview/)
+- [Terraform Helm](https://registry.terraform.io/providers/hashicorp/helm/latest)
+- [Terraform AWS](https://registry.terraform.io/providers/hashicorp/aws/latest)
+- [Terraform K8s](https://registry.terraform.io/providers/hashicorp/kubernetes/latest)

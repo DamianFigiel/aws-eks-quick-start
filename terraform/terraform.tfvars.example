@@ -1,6 +1,6 @@
-aws_region = "us-west-2"
+aws_region = "eu-west-1"
 cluster_name = "phylax-rollup"
-cluster_version = "1.28"
+cluster_version = "1.33"
 
 node_group_instance_types = ["m6i.xlarge", "m5.xlarge", "m5n.xlarge"]
 min_size = 2

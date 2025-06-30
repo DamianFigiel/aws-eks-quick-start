@@ -1,6 +1,6 @@
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 19.15"
+  version = "~> 20.0"
 
   cluster_name    = local.name
   cluster_version = var.cluster_version
@@ -11,16 +11,25 @@ module "eks" {
 
   cluster_addons = {
     coredns = {
-      most_recent = true
+      most_recent                 = true
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "OVERWRITE"
     }
     kube-proxy = {
-      most_recent = true
+      most_recent                 = true
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "OVERWRITE"
     }
     vpc-cni = {
-      most_recent = true
+      most_recent                 = true
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "OVERWRITE"
     }
     aws-ebs-csi-driver = {
-      most_recent = true
+      most_recent                 = true
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "OVERWRITE"
+      service_account_role_arn    = aws_iam_role.ebs_csi_driver.arn
     }
   }
 
@@ -35,9 +44,9 @@ module "eks" {
       max_size     = var.max_size
       desired_size = var.desired_size
 
-      ami_type               = "AL2_x86_64"
-      platform               = "linux"
-      force_update_version   = false
+      ami_type                   = "AL2023_x86_64_STANDARD"
+      platform                   = "linux"
+      force_update_version       = false
       use_custom_launch_template = false
 
       disk_size = 100
@@ -56,6 +65,7 @@ module "eks" {
         AmazonEKS_CNI_Policy               = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
         AmazonEC2ContainerRegistryReadOnly = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
         AmazonEBSCSIDriverPolicy           = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+        EC2VolumeOperations                = aws_iam_policy.ec2_volume_operations.arn
       }
 
       labels = {
@@ -81,9 +91,9 @@ module "eks" {
       max_size     = 5
       desired_size = 2
 
-      ami_type               = "AL2_x86_64"
-      platform               = "linux"
-      force_update_version   = false
+      ami_type                   = "AL2023_x86_64_STANDARD"
+      platform                   = "linux"
+      force_update_version       = false
       use_custom_launch_template = false
 
       disk_size = 500
@@ -99,11 +109,12 @@ module "eks" {
         AmazonEKS_CNI_Policy               = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
         AmazonEC2ContainerRegistryReadOnly = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
         AmazonEBSCSIDriverPolicy           = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+        EC2VolumeOperations                = aws_iam_policy.ec2_volume_operations.arn
       }
 
       labels = {
-        Environment = "production"
-        NodeGroup   = "ethereum-nodes"
+        Environment  = "production"
+        NodeGroup    = "ethereum-nodes"
         WorkloadType = "ethereum"
       }
 
@@ -120,6 +131,9 @@ module "eks" {
       }
     }
   }
+
+  # Fix the for_each error by disabling cluster primary security group tags
+  create_cluster_primary_security_group_tags = false
 
   tags = local.tags
 }

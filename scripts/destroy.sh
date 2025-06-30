@@ -6,7 +6,7 @@ echo "🗑️ Starting Phylax Rollup Infrastructure Destruction"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-AWS_REGION=${AWS_REGION:-us-west-2}
+AWS_REGION=${AWS_REGION:-eu-west-1}
 CLUSTER_NAME=${CLUSTER_NAME:-phylax-rollup}
 
 confirm_destruction() {
@@ -84,11 +84,11 @@ cleanup_local() {
 main() {
     confirm_destruction
     
-    if kubectl cluster-info &> /dev/null; then
-        cleanup_kubernetes
-    else
-        echo "⚠️ No active kubectl context found, skipping Kubernetes cleanup"
-    fi
+    # if kubectl cluster-info &> /dev/null; then
+    #     cleanup_kubernetes
+    # else
+    #     echo "⚠️ No active kubectl context found, skipping Kubernetes cleanup"
+    # fi
     
     if [ -f "$PROJECT_ROOT/terraform/terraform.tfstate" ] || [ -d "$PROJECT_ROOT/terraform/.terraform" ]; then
         destroy_terraform
@@ -101,11 +101,7 @@ main() {
     echo ""
     echo "🎉 Phylax Rollup Infrastructure destruction completed!"
     echo ""
-    echo "📋 Manual cleanup may be required for:"
-    echo "1. Any remaining AWS Load Balancers"
-    echo "2. Any remaining EBS volumes"
-    echo "3. Any remaining security groups"
-    echo "4. Kubernetes context in ~/.kube/config"
+    echo "Remember to remove the Kubernetes context in ~/.kube/config"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

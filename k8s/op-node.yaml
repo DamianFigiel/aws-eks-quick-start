@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: op-node
-        image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-node:latest
+        image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-node:v1.14.1
         ports:
         - containerPort: 8547
           name: http-rpc
@@ -33,7 +33,6 @@ spec:
         - containerPort: 7300
           name: metrics
         args:
-        - op-node
         - --l2=http://op-geth:8551
         - --l2.jwt-secret=/secrets/jwt.hex
         - --rollup.config=/config/rollup.json
@@ -46,9 +45,11 @@ spec:
         - --metrics.addr=0.0.0.0
         - --metrics.port=7300
         - --l1=http://execution-client.ethereum.svc.cluster.local:8545
-        - --l1.rpckind=standard
+        - --l1.rpckind=basic
+        - --l1.beacon=http://beacon-chain.ethereum.svc.cluster.local:5052
         - --verifier.l1-confs=4
         - --log.level=info
+        - --network=mainnet
         volumeMounts:
         - name: op-node-data
           mountPath: /data

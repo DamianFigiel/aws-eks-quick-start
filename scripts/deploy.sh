@@ -6,8 +6,9 @@ echo "🚀 Starting Phylax Rollup Infrastructure Deployment"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-AWS_REGION=${AWS_REGION:-us-west-2}
+AWS_REGION=${AWS_REGION:-eu-west-1}
 CLUSTER_NAME=${CLUSTER_NAME:-phylax-rollup}
+DEPLOY_K8S_ONLY=${DEPLOY_K8S_ONLY:-false}
 
 check_dependencies() {
     echo "🔍 Checking dependencies..."
@@ -32,7 +33,7 @@ check_dependencies() {
         exit 1
     fi
     
-    echo "✅ All dependencies are available"
+    echo "✅ All required dependencies are available"
 }
 
 check_aws_credentials() {
@@ -52,13 +53,81 @@ deploy_terraform() {
     cd "$PROJECT_ROOT/terraform"
     
     echo "🔧 Initializing Terraform..."
-    terraform init
+    terraform init -upgrade
     
     echo "📋 Planning Terraform deployment..."
     terraform plan -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME"
     
-    echo "🚀 Applying Terraform configuration..."
-    terraform apply -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME" -auto-approve
+    echo "🚀 Step 1: Creating EKS cluster infrastructure..."
+    terraform apply -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME" -auto-approve \
+        -target=module.vpc \
+        -target=module.eks \
+        -target=aws_iam_role.cluster_autoscaler \
+        -target=aws_iam_policy.cluster_autoscaler \
+        -target=aws_iam_role_policy_attachment.cluster_autoscaler \
+        -target=aws_iam_role.aws_load_balancer_controller \
+        -target=aws_iam_policy.aws_load_balancer_controller \
+        -target=aws_iam_role_policy_attachment.aws_load_balancer_controller \
+        -target=aws_iam_role.ebs_csi_driver \
+        -target=aws_iam_role_policy_attachment.ebs_csi_driver \
+        -target=aws_eks_access_entry.current_user \
+        -target=aws_eks_access_policy_association.current_user_admin \
+        -target=aws_eks_access_policy_association.current_user_cluster_admin
+    
+    echo "⏳ Waiting for EKS cluster to be fully ready..."
+    # Get the cluster name
+    CLUSTER_NAME_FULL=$(terraform output -raw cluster_name 2>/dev/null || echo "$CLUSTER_NAME")
+    
+    # Wait for the cluster to be ACTIVE
+    while true; do
+        status=$(aws eks describe-cluster --name "$CLUSTER_NAME_FULL" --region "$AWS_REGION" --query "cluster.status" --output text 2>/dev/null || echo "NOT_FOUND")
+        
+        if [ "$status" = "ACTIVE" ]; then
+            echo "✅ EKS cluster $CLUSTER_NAME_FULL is active!"
+            break
+        else
+            echo "⏳ EKS cluster status: $status. Waiting..."
+            sleep 30
+        fi
+    done
+    
+    # Update kubeconfig
+    echo "🔧 Updating kubeconfig..."
+    aws eks update-kubeconfig --name "$CLUSTER_NAME_FULL" --region "$AWS_REGION"
+    
+    # EKS Access Entries are now managed via Terraform in cluster-auth.tf
+    echo "✅ Cluster access is managed via EKS Access Entries in Terraform"
+    
+    # Test cluster connectivity
+    echo "🔍 Testing cluster connectivity..."
+    for i in {1..5}; do
+        if kubectl get nodes >/dev/null 2>&1; then
+            echo "✅ Successfully connected to cluster!"
+            break
+        else
+            echo "⏳ Waiting for cluster API to be ready... (attempt $i/5)"
+            sleep 10
+            
+            # If we're on the last attempt and still failing
+            if [ $i -eq 5 ]; then
+                echo "⚠️ Still facing connectivity issues. Verifying EKS Access Entries..."
+                
+                # Describe the cluster access entries
+                aws eks list-access-entries --cluster-name "$CLUSTER_NAME_FULL" --region "$AWS_REGION"
+                
+                # Get the current caller identity
+                CALLER_IDENTITY=$(aws sts get-caller-identity --query "Arn" --output text)
+                echo "🔍 Current identity: $CALLER_IDENTITY"
+                
+                echo "⚠️ You may need to run terraform apply again to ensure access entries are properly configured."
+                echo "⚠️ Check that your IAM user or role has proper permissions to access the EKS cluster."
+            fi
+        fi
+    done
+    
+    # Additional wait to ensure all controllers are ready
+    echo "⏳ Waiting 30 seconds for all cluster controllers to be ready..."
+    sleep 30
     
     echo "📝 Getting outputs..."
     CLUSTER_NAME_FULL=$(terraform output -raw cluster_name)
@@ -71,24 +140,25 @@ deploy_terraform() {
     cd "$PROJECT_ROOT"
 }
 
-configure_kubectl() {
-    echo "⚙️ Configuring kubectl..."
+deploy_addons() {
+    echo "🚀 Deploying cluster add-ons (AWS Load Balancer Controller, Cluster Autoscaler, Prometheus)..."
     
+    # Get IAM role ARNs from Terraform outputs
     cd "$PROJECT_ROOT/terraform"
-    CLUSTER_NAME_FULL=$(terraform output -raw cluster_name)
+    AWS_LB_CONTROLLER_ROLE_ARN=$(terraform output -raw aws_load_balancer_controller_role_arn)
+    CLUSTER_AUTOSCALER_ROLE_ARN=$(terraform output -raw cluster_autoscaler_role_arn)
     cd "$PROJECT_ROOT"
     
-    aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME_FULL"
+    chmod +x "$PROJECT_ROOT/k8s/addons/install-addons.sh"
+    "$PROJECT_ROOT/k8s/addons/install-addons.sh" "$CLUSTER_NAME" "$AWS_REGION" "$AWS_LB_CONTROLLER_ROLE_ARN" "$CLUSTER_AUTOSCALER_ROLE_ARN"
     
-    echo "🔍 Testing cluster connection..."
-    kubectl get nodes
-    
-    echo "✅ kubectl configured successfully"
+    echo "✅ Add-ons deployment completed"
 }
 
 deploy_kubernetes() {
     echo "☸️ Deploying Kubernetes resources..."
     
+    # Add support for genesis-ssz.yaml
     echo "📦 Creating namespaces..."
     kubectl apply -f "$PROJECT_ROOT/k8s/namespaces.yaml"
     
@@ -150,12 +220,26 @@ get_service_info() {
 
 main() {
     check_dependencies
-    check_aws_credentials
-    deploy_terraform
-    configure_kubectl
-    deploy_kubernetes
-    wait_for_services
-    get_service_info
+    
+    if [ "$DEPLOY_K8S_ONLY" = "true" ]; then
+        echo "🚀 Running Kubernetes-only deployment"
+        # Skip AWS and Terraform but ensure kubectl is configured correctly
+        if ! kubectl get nodes &>/dev/null; then
+            echo "❌ Cannot connect to Kubernetes cluster. Please check your kubeconfig."
+            exit 1
+        fi
+        
+        deploy_kubernetes
+        wait_for_services
+        get_service_info
+    else
+        check_aws_credentials
+        deploy_terraform
+        deploy_addons
+        deploy_kubernetes
+        wait_for_services
+        get_service_info
+    fi
     
     echo ""
     echo "🎉 Phylax Rollup Infrastructure deployment completed successfully!"

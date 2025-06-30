@@ -1,4 +1,4 @@
-.PHONY: help install deploy destroy status logs clean
+.PHONY: help install deploy deploy-k8s destroy status logs clean
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -6,8 +6,8 @@ help: ## Show this help message
 	@echo 'Targets:'
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: ## Install required dependencies
-	@echo "🔧 Installing dependencies..."
+install-check: ## Check if required dependencies are installed
+	@echo "🔧 Checking dependencies..."
 	@command -v terraform >/dev/null 2>&1 || { echo "Please install Terraform"; exit 1; }
 	@command -v kubectl >/dev/null 2>&1 || { echo "Please install kubectl"; exit 1; }
 	@command -v aws >/dev/null 2>&1 || { echo "Please install AWS CLI"; exit 1; }
@@ -28,6 +28,16 @@ deploy: ## Deploy the complete infrastructure
 	@echo "🚀 Deploying infrastructure..."
 	@chmod +x scripts/deploy.sh
 	@./scripts/deploy.sh
+
+deploy-k8s: ## Deploy only Kubernetes resources (assumes cluster exists)
+	@echo "🚀 Deploying Kubernetes resources only..."
+	@chmod +x scripts/deploy.sh
+	@DEPLOY_K8S_ONLY=true ./scripts/deploy.sh
+
+deploy-addons: ## Deploy only cluster add-ons
+	@echo "🚀 Deploying cluster add-ons..."
+	@chmod +x k8s/addons/install-addons.sh
+	@./k8s/addons/install-addons.sh $${CLUSTER_NAME:-phylax-rollup} $${AWS_REGION:-eu-west-1} $${AWS_LB_CONTROLLER_ROLE_ARN} $${CLUSTER_AUTOSCALER_ROLE_ARN}
 
 destroy: ## Destroy all infrastructure
 	@echo "🗑️ Destroying infrastructure..."
@@ -74,6 +84,11 @@ test-connectivity: ## Test connectivity to rollup RPC
 
 clean: ## Clean up local files
 	@echo "🧹 Cleaning up local files..."
+	@echo "⚠️  This will remove:"
+	@echo "   - terraform/.terraform directory"
+	@echo "   - terraform state files"
+	@echo "   - terraform lock file"
+	@read -p "Are you sure you want to continue? [y/N]: " confirm && [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ] || (echo "❌ Cleanup cancelled" && exit 1)
 	@rm -rf terraform/.terraform
 	@rm -f terraform/terraform.tfstate*
 	@rm -f terraform/.terraform.lock.hcl
@@ -87,3 +102,13 @@ format: ## Format all configuration files
 security-scan: ## Run security scan on Terraform files
 	@echo "🔒 Running security scan..."
 	@command -v checkov >/dev/null 2>&1 && cd terraform && checkov -d . || echo "Install checkov for security scanning"
+
+clean-addons: ## Clean up cluster add-ons
+	@echo "🗑️ Cleaning up cluster add-ons..."
+	@echo "Uninstalling Prometheus..."
+	@helm uninstall prometheus -n monitoring || echo "No Prometheus installation found"
+	@echo "Uninstalling Cluster Autoscaler..."
+	@helm uninstall cluster-autoscaler -n kube-system || echo "No Cluster Autoscaler installation found"
+	@echo "Uninstalling AWS Load Balancer Controller..."
+	@helm uninstall aws-load-balancer-controller -n kube-system || echo "No AWS Load Balancer Controller installation found"
+	@echo "✅ Add-ons cleanup completed"

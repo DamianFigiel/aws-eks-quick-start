@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: op-geth
-        image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-geth:latest
+        image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-geth:v1.101404.1
         ports:
         - containerPort: 8545
           name: http-rpc
@@ -59,6 +59,7 @@ spec:
         - --nodiscover
         - --gcmode=archive
         - --syncmode=full
+        - --override.ecotone=1710338135
         volumeMounts:
         - name: op-geth-data
           mountPath: /data

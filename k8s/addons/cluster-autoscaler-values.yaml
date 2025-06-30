@@ -1,0 +1,16 @@
+# Values for Cluster Autoscaler
+autoDiscovery:
+  clusterName: ${CLUSTER_NAME}
+
+awsRegion: ${AWS_REGION}
+
+rbac:
+  serviceAccount:
+    create: true
+    name: cluster-autoscaler
+    annotations:
+      eks.amazonaws.com/role-arn: ${CLUSTER_AUTOSCALER_ROLE_ARN}
+
+extraArgs:
+  scale-down-delay-after-add: 2m
+  scale-down-unneeded-time: 2m 

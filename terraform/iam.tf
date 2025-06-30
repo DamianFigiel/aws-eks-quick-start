@@ -145,7 +145,7 @@ resource "aws_iam_policy" "aws_load_balancer_controller" {
         ]
         Condition = {
           Null = {
-            "aws:RequestedRegion" = "false"
+            "aws:RequestedRegion"                   = "false"
             "aws:ResourceTag/elbv2.k8s.aws/cluster" = "false"
           }
         }
@@ -246,4 +246,54 @@ resource "aws_iam_policy" "cluster_autoscaler" {
 resource "aws_iam_role_policy_attachment" "cluster_autoscaler" {
   policy_arn = aws_iam_policy.cluster_autoscaler.arn
   role       = aws_iam_role.cluster_autoscaler.name
+}
+
+data "aws_iam_policy_document" "ebs_csi_driver_assume_role_policy" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    effect  = "Allow"
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(module.eks.cluster_oidc_issuer_url, "https://", "")}:sub"
+      values   = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
+    }
+
+    principals {
+      identifiers = [module.eks.oidc_provider_arn]
+      type        = "Federated"
+    }
+  }
+}
+
+resource "aws_iam_role" "ebs_csi_driver" {
+  assume_role_policy = data.aws_iam_policy_document.ebs_csi_driver_assume_role_policy.json
+  name               = "${local.name}-ebs-csi-driver"
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+  role       = aws_iam_role.ebs_csi_driver.name
+}
+
+# EC2 Volume Operations Policy
+resource "aws_iam_policy" "ec2_volume_operations" {
+  name        = "${local.name}-ec2-volume-operations"
+  description = "Policy for EC2 volume operations"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "VisualEditor0"
+        Effect    = "Allow"
+        Action    = [
+          "ec2:CreateTags",
+          "ec2:CreateVolume",
+          "ec2:AttachVolume"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }

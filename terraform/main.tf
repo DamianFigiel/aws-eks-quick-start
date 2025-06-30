@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.0"
+  required_version = ">= 1.5.7"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -9,42 +9,47 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.20"
     }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.10"
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
     }
   }
 }
 
 provider "aws" {
   region = var.aws_region
-  
+
   default_tags {
     tags = var.common_tags
   }
 }
 
+# Data sources for EKS authentication
+data "aws_eks_cluster" "cluster" {
+  name = module.eks.cluster_name
+  depends_on = [module.eks]
+}
+
+data "aws_eks_cluster_auth" "cluster" {
+  name = module.eks.cluster_name
+  depends_on = [module.eks]
+}
+
 provider "kubernetes" {
-  host                   = module.eks.cluster_endpoint
-  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  host                   = data.aws_eks_cluster.cluster.endpoint
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
   
   exec {
     api_version = "client.authentication.k8s.io/v1beta1"
     command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name]
-  }
-}
-
-provider "helm" {
-  kubernetes {
-    host                   = module.eks.cluster_endpoint
-    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-    
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name]
-    }
+    args = [
+      "eks",
+      "get-token",
+      "--cluster-name",
+      data.aws_eks_cluster.cluster.id,
+      "--region",
+      var.aws_region
+    ]
   }
 }
 
@@ -58,7 +63,7 @@ data "aws_availability_zones" "available" {
 data "aws_caller_identity" "current" {}
 
 locals {
-  name   = "${var.cluster_name}-${random_string.suffix.result}"
+  name   = var.cluster_name
   region = var.aws_region
 
   vpc_cidr = "10.0.0.0/16"
@@ -68,9 +73,4 @@ locals {
     Blueprint  = local.name
     GithubRepo = "github.com/phylax/rollup-infrastructure"
   })
-}
-
-resource "random_string" "suffix" {
-  length  = 8
-  special = false
 }

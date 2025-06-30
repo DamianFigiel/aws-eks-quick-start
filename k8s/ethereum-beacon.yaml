@@ -27,33 +27,37 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: beacon-chain
-        image: gcr.io/prysmaticlabs/prysm/beacon-chain:stable
+        image: sigp/lighthouse:v7.0.1
         ports:
-        - containerPort: 4000
-          name: grpc
-        - containerPort: 13000
+        - containerPort: 5052
+          name: http-api
+        - containerPort: 9000
           name: p2p-tcp
           protocol: TCP
-        - containerPort: 12000
+        - containerPort: 9000
           name: p2p-udp
           protocol: UDP
+        - containerPort: 5054
+          name: metrics
         args:
+        - lighthouse
+        - beacon_node
         - --datadir=/data
-        - --rpc-host=0.0.0.0
-        - --monitoring-host=0.0.0.0
-        - --http-web3provider=http://execution-client:8545
-        - --genesis-state=/config/genesis.ssz
-        - --chain-config-file=/config/config.yml
-        - --accept-terms-of-use
-        - --jwt-secret=/secrets/jwt.hex
-        - --suggested-fee-recipient=0x0000000000000000000000000000000000000000
-        - --min-sync-peers=1
-        - --verbosity=info
+        - --network=mainnet
+        - --execution-endpoint=http://execution-client:8551
+        - --execution-jwt=/secrets/jwt.hex
+        - --http
+        - --http-address=0.0.0.0
+        - --http-port=5052
+        - --metrics
+        - --metrics-address=0.0.0.0
+        - --metrics-port=5054
+        - --disable-deposit-contract-sync
+        - --checkpoint-sync-url=https://mainnet.checkpoint.sigp.io
+        - --genesis-state-url=https://mainnet.checkpoint.sigp.io/genesis.ssz
         volumeMounts:
         - name: beacon-data
           mountPath: /data
-        - name: config-volume
-          mountPath: /config
         - name: jwt-secret
           mountPath: /secrets
           readOnly: true
@@ -65,9 +69,6 @@ spec:
             memory: "8Gi"
             cpu: "2000m"
       volumes:
-      - name: config-volume
-        configMap:
-          name: ethereum-config
       - name: jwt-secret
         secret:
           secretName: jwt-secret
@@ -92,15 +93,18 @@ spec:
   selector:
     app: beacon-chain
   ports:
-  - name: grpc
-    port: 4000
-    targetPort: 4000
+  - name: http-api
+    port: 5052
+    targetPort: 5052
   - name: p2p-tcp
-    port: 13000
-    targetPort: 13000
+    port: 9000
+    targetPort: 9000
     protocol: TCP
   - name: p2p-udp
-    port: 12000
-    targetPort: 12000
+    port: 9000
+    targetPort: 9000
     protocol: UDP
+  - name: metrics
+    port: 5054
+    targetPort: 5054
   type: ClusterIP

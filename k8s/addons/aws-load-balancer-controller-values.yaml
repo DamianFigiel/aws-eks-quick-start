@@ -1,0 +1,11 @@
+# Values for AWS Load Balancer Controller
+clusterName: ${CLUSTER_NAME}
+region: ${AWS_REGION}
+vpcId: ${VPC_ID}
+logLevel: debug
+
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller
+  annotations:
+    eks.amazonaws.com/role-arn: ${AWS_LB_CONTROLLER_ROLE_ARN} 

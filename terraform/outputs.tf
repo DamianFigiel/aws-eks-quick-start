@@ -23,12 +23,6 @@ output "cluster_certificate_authority_data" {
   value       = module.eks.cluster_certificate_authority_data
 }
 
-output "cluster_token" {
-  description = "Token to use to authenticate with the cluster"
-  value       = module.eks.cluster_token
-  sensitive   = true
-}
-
 output "vpc_id" {
   description = "ID of the VPC where the cluster security group belongs"
   value       = module.vpc.vpc_id
@@ -67,6 +61,11 @@ output "aws_load_balancer_controller_role_arn" {
 output "cluster_autoscaler_role_arn" {
   description = "ARN of the Cluster Autoscaler IAM role"
   value       = aws_iam_role.cluster_autoscaler.arn
+}
+
+output "ebs_csi_driver_role_arn" {
+  description = "ARN of the EBS CSI Driver IAM role"
+  value       = aws_iam_role.ebs_csi_driver.arn
 }
 
 output "grafana_admin_password" {
