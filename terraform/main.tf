@@ -71,6 +71,5 @@ locals {
 
   tags = merge(var.common_tags, {
     Blueprint  = local.name
-    GithubRepo = "github.com/phylax/rollup-infrastructure"
   })
 }

@@ -1,302 +1,310 @@
-# Phylax Rollup Infrastructure
+# AWS EKS Cluster Provisioning Tool
 
-A production-ready, high-availability Ethereum rollup infrastructure deployed on AWS EKS using Terraform and Kubernetes.
+A comprehensive Terraform-based tool for provisioning AWS EKS clusters with essential add-ons and monitoring capabilities.
 
-💰 **Estimated Monthly Cost**: ~$850-1200 (3x m6i.xlarge @ $140/mo + 2x m6i.2xlarge @ $280/mo + EKS @ $73/mo + NAT Gateways @ $90/mo + EBS storage @ $100/mo)
+## Features
 
-## 🏗️ Architecture
+- **EKS Cluster**: Production-ready Kubernetes cluster with latest version (1.33)
+- **Node Groups**: Auto-scaling node groups with spot and on-demand instances
+- **IAM Integration**: IAM Roles for Service Accounts (IRSA) enabled
+- **Essential Add-ons**:
+  - AWS Load Balancer Controller
+  - Cluster Autoscaler
+  - EBS CSI Driver
+  - Prometheus + Grafana monitoring stack
+- **Security**: EKS Access Entries for modern authentication
+- **Networking**: VPC with proper subnets and security groups
 
-### ASCII Architecture Diagram
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                                   Internet                                  │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                        ┌──────────────┴──────────────┐
-                        │    ALB/NLB Load Balancer    │
-                        │   (RPC External Access)     │
-                        └──────────────┬──────────────┘
-                                       │
-┌──────────────────────────────────────┴──────────────────────────────────────┐
-│                              AWS VPC (10.0.0.0/16)                          │
-│  ┌────────────────────────────┐    │    ┌────────────────────────────────┐  │
-│  │    Public Subnet (AZ-a)    │    │    │    Public Subnet (AZ-b)        │  │
-│  │      NAT Gateway           │◄───┼───►│      NAT Gateway               │  │
-│  └────────────┬───────────────┘    │    └────────────┬───────────────────┘  │
-│               │                    │                 │                      │
-│  ┌────────────┴───────────────┐    │    ┌────────────┴───────────────────┐  │
-│  │   Private Subnet (AZ-a)    │    │    │   Private Subnet (AZ-b)        │  │
-│  │                            │    │    │                                │  │
-│  │  ┌──────────────────────┐  │    │    │  ┌──────────────────────────┐  │  │
-│  │  │   EKS Node Group 1   │  │◄───┼───►│  │   EKS Node Group 2       │  │  │
-│  │  │                      │  │    │    │  │                          │  │  │
-│  │  │ ┌──────────────────┐ │  │    │    │  │ ┌──────────────────────┐ │  │  │
-│  │  │ │  Ethereum L1     │ │  │    │    │  │ │  Rollup L2           │ │  │  │
-│  │  │ │  - Geth (exec)   │ │  │    │    │  │ │  - OP-Geth           │ │  │  │
-│  │  │ │  - Prysm (cons)  │ │  │    │    │  │ │  - OP-Node           │ │  │  │
-│  │  │ └──────────────────┘ │  │    │    │  │ └──────────────────────┘ │  │  │
-│  │  │                      │  │    │    │  │                          │  │  │
-│  │  │ ┌──────────────────┐ │  │    │    │  │ ┌──────────────────────┐ │  │  │
-│  │  │ │   Monitoring     │ │  │    │    │  │ │   Add-ons            │ │  │  │
-│  │  │ │  - Prometheus    │ │  │    │    │  │ │  - AWS LB Controller │ │  │  │
-│  │  │ │  - Grafana       │ │  │    │    │  │ │  - Cluster Autoscaler│ │  │  │
-│  │  │ └──────────────────┘ │  │    │    │  │ └──────────────────────┘ │  │  │
-│  │  └──────────────────────┘  │    │    │  └──────────────────────────┘  │  │
-│  └────────────────────────────┘    │    └────────────────────────────────┘  │
-│                                    │                                        │
-│  ┌─────────────────────────────────┴─────────────────────────────────────┐  │
-│  │                         Persistent Storage (EBS)                      │  │
-│  │  - Blockchain Data     - Prometheus Metrics     - Logs                │  │
-│  └───────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+## Prerequisites
 
-This infrastructure deploys a complete Ethereum rollup stack including:
+### 1. Required Tools
 
-### Core Components
-- **Ethereum Execution Layer**: Geth client for L1 connectivity
-- **Ethereum Consensus Layer**: Prysm beacon chain client
-- **OP-Geth**: Optimism execution engine for L2
-- **OP-Node**: Optimism consensus/rollup node for L2
-
-### Infrastructure Components
-- **AWS EKS**: Managed Kubernetes cluster with auto-scaling
-- **VPC**: Multi-AZ setup with public/private subnets
-- **EBS CSI**: High-performance storage for blockchain data
-- **ALB/NLB**: Load balancers for external access
-- **Monitoring**: Prometheus + Grafana stack
-- **IAM**: Least-privilege security with IRSA
-
-## 📋 Prerequisites
-
-### Required Tools
-- [Terraform](https://terraform.io/) >= 1.0
-- [kubectl](https://kubernetes.io/docs/tasks/tools/) >= 1.33
-- [AWS CLI](https://aws.amazon.com/cli/) >= 2.0
-- [Helm](https://helm.sh/) >= 3.0
+You need to install the following tools:
 
 ```bash
-# To verify if all is installed do:
-make install-check
+# Install Terraform
+curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs)"
+sudo apt-get update && sudo apt-get install terraform
+
+# Install AWS CLI
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+
+# Install kubectl
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+# Install Helm
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 ```
 
-### AWS Configuration
+### 2. AWS Configuration
+
+Configure your AWS credentials:
+
 ```bash
 aws configure
-# Ensure you have appropriate IAM permissions for EKS, VPC, IAM, etc.
 ```
 
-## 🚀 Quick Start
+You'll need to provide:
+- AWS Access Key ID
+- AWS Secret Access Key
+- Default region (e.g., eu-west-1)
+- Default output format (json)
 
-### 1. Clone and Configure
+### 3. Required AWS Permissions
+
+Your AWS user/role needs the following permissions:
+- EKS full access
+- EC2 full access
+- IAM full access
+- VPC full access
+- EBS full access
+
+## Quick Start
+
+### Option A: Automated Setup (Recommended)
+
+Use the quick start script for an interactive setup:
+
 ```bash
 git clone <repository-url>
-cd phylax
+cd <repository-name>
+./quick-start.sh
+```
 
-# Copy and customize variables
+The script will:
+- Check all dependencies
+- Verify AWS credentials
+- Create configuration from template
+- Guide you through customization
+- Deploy the cluster
+
+### Option B: Manual Setup
+
+### 1. Clone and Configure
+
+```bash
+git clone <repository-url>
+cd <repository-name>
+
+# Option A: Use the quick start script (recommended)
+./quick-start.sh
+
+# Option B: Manual configuration
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
-# Edit terraform/terraform.tfvars with your preferences
 ```
 
-### 2. Deploy Infrastructure
+### 2. Customize Configuration
+
+Edit `terraform/terraform.tfvars` with your desired settings:
+
+```hcl
+aws_region      = "eu-west-1"
+cluster_name    = "my-eks-cluster"
+cluster_version = "1.33"
+
+node_group_instance_types = ["m6i.xlarge"]
+min_size                  = 2
+max_size                  = 10
+desired_size              = 3
+
+common_tags = {
+  Environment = "production"
+  Project     = "my-project"
+  ManagedBy   = "terraform"
+  Owner       = "platform-team"
+}
+```
+
+### 3. Deploy Infrastructure
+
+Deploy the complete EKS cluster with all add-ons:
+
 ```bash
-# Option A: Using the deployment script (recommended)
 make deploy
-
-# Option B: Manual Terraform deployment
-cd terraform
-terraform init
-terraform apply
 ```
 
-### 3. Access Services
+This will:
+1. Create VPC and networking resources
+2. Deploy EKS cluster with node groups
+3. Configure IAM roles and policies
+4. Install cluster add-ons (Load Balancer Controller, Cluster Autoscaler, Prometheus)
+
+### 4. Deploy Add-ons Only (if cluster already exists)
+
+If you already have an EKS cluster and just want to install the add-ons:
+
 ```bash
-# Get LoadBalancer endpoint for rollup RPC
-kubectl get svc -n rollup op-geth-external
-
-# Access Grafana (default: admin/admin)
-kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
+make deploy-addons
 ```
 
-## 🗂️ Project Structure
+## Usage
 
-```
-├── terraform/               # Infrastructure as Code
-│   ├── main.tf             # Main Terraform configuration
-│   ├── variables.tf        # Input variables
-│   ├── outputs.tf          # Output values
-│   ├── vpc.tf              # VPC and networking
-│   ├── eks.tf              # EKS cluster configuration
-│   ├── iam.tf              # IAM roles and policies
-│   ├── addons.tf           # EKS add-ons and Helm charts
-│   └── cluster-auth.tf     # EKS access entries
-├── k8s/                    # Kubernetes manifests
-│   ├── namespaces.yaml     # Kubernetes namespaces
-│   ├── configmaps.yaml     # Configuration data
-│   ├── persistent-volumes.yaml # Storage claims
-│   ├── ethereum-execution.yaml # L1 execution client
-│   ├── ethereum-beacon.yaml    # L1 consensus client
-│   ├── op-geth.yaml        # L2 execution engine
-│   ├── op-node.yaml        # L2 rollup node
-│   ├── monitoring.yaml     # Monitoring configuration
-│   └── addons/             # Helm chart values
-│       ├── aws-load-balancer-controller-values.yaml
-│       ├── cluster-autoscaler-values.yaml
-│       ├── prometheus-values.yaml
-│       └── install-addons.sh
-├── scripts/                # Deployment automation
-│   ├── deploy.sh           # Full deployment script
-│   └── destroy.sh          # Cleanup script
-├── ARCHITECTURE.md         # Technical design decisions
-├── RUNBOOK.md             # Operational procedures for health checks, restarts, and troubleshooting
-├── TASK_SUMMARY.md        # Project overview
-└── README.md              # This file
+### Check Status
+
+```bash
+make status
 ```
 
-## 🔧 Configuration
+### Access Grafana
 
-### Terraform Variables
+```bash
+make port-forward-grafana
+# Then visit http://localhost:3000 (admin/admin)
+```
 
-Key variables in `terraform/terraform.tfvars`:
+### Test Connectivity
+
+```bash
+make test-connectivity
+```
+
+### View Logs
+
+```bash
+make logs
+```
+
+### Clean Up
+
+```bash
+# Full cleanup (recommended)
+make destroy
+
+# Clean up external resources only (if destroy fails)
+make cleanup-external
+```
+
+## Configuration Options
+
+### Cluster Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `aws_region` | AWS region for deployment | `eu-west-1` |
-| `cluster_name` | EKS cluster name | `phylax-rollup` |
-| `cluster_version` | Kubernetes version | `1.28` |
-| `node_group_instance_types` | EC2 instance types | `["m6i.xlarge", "m5.xlarge"]` |
+| `cluster_name` | Name of the EKS cluster | `eks-cluster` |
+| `cluster_version` | Kubernetes version | `1.33` |
+| `aws_region` | AWS region | `eu-west-1` |
+
+### Node Group Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `node_group_instance_types` | EC2 instance types | `["m6i.xlarge"]` |
 | `min_size` | Minimum nodes | `2` |
 | `max_size` | Maximum nodes | `10` |
 | `desired_size` | Desired nodes | `3` |
 
-### Kubernetes Configuration
+### Add-ons Configuration
 
-The infrastructure creates two main namespaces:
-- `ethereum`: L1 Ethereum nodes
-- `rollup`: L2 Optimism rollup components
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `enable_cluster_autoscaler` | Enable cluster autoscaler | `true` |
+| `enable_aws_load_balancer_controller` | Enable Load Balancer Controller | `true` |
+| `enable_ebs_csi_driver` | Enable EBS CSI Driver | `true` |
+| `enable_monitoring` | Enable Prometheus/Grafana | `true` |
 
-## 📊 Monitoring
+## Architecture
 
-### Grafana Dashboards
-- **Rollup Infrastructure**: Overview of rollup components
-- **Kubernetes Cluster**: EKS cluster metrics
-- **Node Metrics**: Individual component performance
-
-### Key Metrics
-- Block height synchronization
-- Transaction throughput
-- Node health and connectivity
-- Resource utilization
-
-### Accessing Monitoring
-```bash
-# Port-forward to Grafana
-kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
-
-# Default credentials: admin/admin
-open http://localhost:3000
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        AWS EKS Cluster                      │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────────┐  ┌─────────────────┐  ┌──────────────┐ │
+│  │   Node Group 1  │  │   Node Group 2  │  │   Node Group │ │
+│  │  (On-Demand)    │  │    (Spot)       │  │   (System)   │ │
+│  └─────────────────┘  └─────────────────┘  └──────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│                    EKS Add-ons                              │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌──────────────┐ │
+│  │ Cluster         │  │ AWS Load        │  │ EBS CSI      │ │
+│  │ Autoscaler      │  │ Balancer        │  │ Driver       │ │
+│  │                 │  │ Controller      │  │              │ │
+│  └─────────────────┘  └─────────────────┘  └──────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│                    Monitoring Stack                         │
+│  ┌─────────────────┐  ┌─────────────────┐                  │
+│  │   Prometheus    │  │     Grafana     │                  │
+│  │                 │  │                 │                  │
+│  └─────────────────┘  └─────────────────┘                  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## 🔐 Security
+## Cost Estimation
 
-### Network Security
-- Private subnets for worker nodes
-- Security groups with minimal required access
-- No direct internet access for blockchain nodes
+Monthly cost estimate for default configuration:
+- **EKS Control Plane**: ~$73/month
+- **Node Groups** (3x m6i.xlarge): ~$438/month
+- **Load Balancers**: ~$18/month
+- **EBS Volumes**: ~$50/month
+- **Data Transfer**: ~$20/month
+- **Total**: ~$599/month
 
-### IAM Security
-- IAM Roles for Service Accounts (IRSA)
-- Least-privilege principle
-- No long-term access keys
+*Costs may vary based on usage, region, and instance types.*
 
-### Storage Security
-- Encrypted EBS volumes
-- Persistent volume claims for data retention
-- Regular backup recommended
-
-## 🚀 Scaling
-
-### Horizontal Scaling
-```bash
-# Scale rollup nodes
-kubectl scale statefulset op-geth -n rollup --replicas=3
-kubectl scale statefulset op-node -n rollup --replicas=3
-```
-
-### Vertical Scaling
-Update resource requests/limits in the deployment manifests and redeploy.
-
-### Auto-scaling
-EKS cluster auto-scaler is enabled by default and will add/remove nodes based on demand.
-
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
-#### Pods Stuck in Pending
-```bash
-# Check node capacity
-kubectl describe nodes
+1. **Cluster not accessible**
+   ```bash
+   aws eks update-kubeconfig --name <cluster-name> --region <region>
+   ```
 
-# Check events
-kubectl get events -n rollup --sort-by='.lastTimestamp'
-```
+2. **Add-ons not working**
+   ```bash
+   make clean-addons
+   make deploy-addons
+   ```
 
-#### Storage Issues
-```bash
-# Check PVC status
-kubectl get pvc -n rollup
-kubectl get pvc -n ethereum
+3. **Terraform state issues**
+   ```bash
+   make clean
+   make deploy
+   ```
 
-# Check storage class
-kubectl get storageclass
-```
+4. **Destroy fails due to external resources**
+   ```bash
+   # Clean up external resources first
+   make cleanup-external
+   # Then try destroy again
+   make destroy
+   ```
 
-#### Network Connectivity
-```bash
-# Test internal connectivity
-kubectl exec -it <pod-name> -n rollup -- curl http://execution-client.ethereum.svc.cluster.local:8545
-
-# Check service endpoints
-kubectl get endpoints -n rollup
-```
-
-### Logs
-```bash
-# View rollup logs
-kubectl logs -f statefulset/op-geth -n rollup
-kubectl logs -f statefulset/op-node -n rollup
-
-# View Ethereum logs
-kubectl logs -f statefulset/execution-client -n ethereum
-kubectl logs -f statefulset/beacon-chain -n ethereum
-```
-
-## 🗑️ Cleanup
-
-To destroy all infrastructure:
+### Useful Commands
 
 ```bash
-./scripts/destroy.sh
+# Check cluster status
+kubectl get nodes
 
-# or
-make destroy
+# Check add-ons
+kubectl get pods -A
+
+# Check services
+kubectl get svc -A
+
+# View logs
+kubectl logs -f <pod-name> -n <namespace>
 ```
 
-**⚠️ Warning**: This will permanently delete all data and resources!
+## Security
 
-## 📚 Additional Documentation
+- EKS Access Entries for modern authentication
+- IAM Roles for Service Accounts (IRSA)
+- Encrypted EBS volumes
+- Security groups with minimal required access
+- Private subnets for worker nodes
 
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Detailed technical architecture, monitoring strategy, and performance optimization
-- **[RUNBOOK.md](./RUNBOOK.md)** - Operational procedures for health checks, restarts, and troubleshooting
-- **[TASK_SUMMARY.md](./TASK_SUMMARY.md)** - Overview of the platform engineering assessment
+## Contributing
 
-## 🔗 References
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
-- [Optimism Docs](https://docs.optimism.io/)
-- [AWS EKS Best Practices](https://aws.github.io/aws-eks-best-practices/)
-- [Ethereum Node Setup](https://ethereum.org/en/developers/docs/nodes-and-clients/)
-- [Kubernetes Production Best Practices](https://kubernetes.io/docs/concepts/configuration/overview/)
-- [Terraform Helm](https://registry.terraform.io/providers/hashicorp/helm/latest)
-- [Terraform AWS](https://registry.terraform.io/providers/hashicorp/aws/latest)
-- [Terraform K8s](https://registry.terraform.io/providers/hashicorp/kubernetes/latest)
+## License
+
+This project is licensed under the MIT License.

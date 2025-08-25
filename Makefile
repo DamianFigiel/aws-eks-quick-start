@@ -1,4 +1,4 @@
-.PHONY: help install deploy deploy-k8s destroy status logs clean
+.PHONY: help install deploy deploy-addons destroy status logs clean
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -24,20 +24,15 @@ plan: ## Plan Terraform deployment
 	@echo "📋 Planning Terraform deployment..."
 	@cd terraform && terraform init && terraform plan
 
-deploy: ## Deploy the complete infrastructure
-	@echo "🚀 Deploying infrastructure..."
+deploy: ## Deploy the complete EKS cluster with add-ons
+	@echo "🚀 Deploying EKS cluster with add-ons..."
 	@chmod +x scripts/deploy.sh
 	@./scripts/deploy.sh
 
-deploy-k8s: ## Deploy only Kubernetes resources (assumes cluster exists)
-	@echo "🚀 Deploying Kubernetes resources only..."
+deploy-addons: ## Deploy only cluster add-ons (assumes cluster exists)
+	@echo "🚀 Deploying cluster add-ons only..."
 	@chmod +x scripts/deploy.sh
 	@DEPLOY_K8S_ONLY=true ./scripts/deploy.sh
-
-deploy-addons: ## Deploy only cluster add-ons
-	@echo "🚀 Deploying cluster add-ons..."
-	@chmod +x k8s/addons/install-addons.sh
-	@./k8s/addons/install-addons.sh $${CLUSTER_NAME:-phylax-rollup} $${AWS_REGION:-eu-west-1} $${AWS_LB_CONTROLLER_ROLE_ARN} $${CLUSTER_AUTOSCALER_ROLE_ARN}
 
 destroy: ## Destroy all infrastructure
 	@echo "🗑️ Destroying infrastructure..."
@@ -47,40 +42,28 @@ destroy: ## Destroy all infrastructure
 status: ## Show status of all components
 	@echo "📊 Checking infrastructure status..."
 	@echo "🏗️ Terraform Status:"
-	@cd terraform && terraform show -json | jq -r '.values.root_module.resources[] | select(.type == "aws_eks_cluster") | "EKS Cluster: " + .values.name'
+	@cd terraform && terraform show -json | jq -r '.values.root_module.resources[] | select(.type == "aws_eks_cluster") | "EKS Cluster: " + .values.name' 2>/dev/null || echo "No EKS cluster found"
 	@echo ""
 	@echo "☸️ Kubernetes Status:"
-	@kubectl get nodes -o wide || echo "❌ Cluster not accessible"
+	@kubectl get nodes -o wide 2>/dev/null || echo "❌ Cluster not accessible"
 	@echo ""
 	@echo "🔗 Services:"
-	@kubectl get svc -n rollup -o wide || echo "❌ Rollup namespace not found"
-	@kubectl get svc -n ethereum -o wide || echo "❌ Ethereum namespace not found"
+	@kubectl get svc -A -o wide 2>/dev/null || echo "❌ No services found"
 	@echo ""
 	@echo "📦 Pods:"
-	@kubectl get pods -n rollup || echo "❌ Rollup namespace not found"
-	@kubectl get pods -n ethereum || echo "❌ Ethereum namespace not found"
+	@kubectl get pods -A 2>/dev/null || echo "❌ No pods found"
 
-logs-rollup: ## Show logs for rollup components
-	@echo "📜 Rollup logs:"
-	@kubectl logs -l app=op-geth -n rollup --tail=50
-
-logs-ethereum: ## Show logs for Ethereum components
-	@echo "📜 Ethereum logs:"
-	@kubectl logs -l app=execution-client -n ethereum --tail=50
-
-logs: logs-rollup logs-ethereum ## Show logs for all components
+logs: ## Show logs for all components
+	@echo "📜 Cluster logs:"
+	@kubectl get pods -A --no-headers | head -10 | awk '{print "Namespace: " $$1 " Pod: " $$2}' | while read line; do echo "$$line"; done
 
 port-forward-grafana: ## Port-forward Grafana to localhost:3000
 	@echo "🌐 Port-forwarding Grafana to http://localhost:3000"
 	@kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
 
-port-forward-rollup: ## Port-forward rollup RPC to localhost:8545
-	@echo "🌐 Port-forwarding rollup RPC to http://localhost:8545"
-	@kubectl port-forward -n rollup svc/op-geth 8545:8545
-
-test-connectivity: ## Test connectivity to rollup RPC
-	@echo "🔍 Testing rollup connectivity..."
-	@kubectl get svc -n rollup op-geth-external -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' | xargs -I {} curl -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' http://{}:8545 || echo "❌ RPC not accessible"
+test-connectivity: ## Test connectivity to cluster
+	@echo "🔍 Testing cluster connectivity..."
+	@kubectl get nodes 2>/dev/null && echo "✅ Cluster is accessible" || echo "❌ Cannot connect to cluster"
 
 clean: ## Clean up local files
 	@echo "🧹 Cleaning up local files..."
@@ -106,9 +89,14 @@ security-scan: ## Run security scan on Terraform files
 clean-addons: ## Clean up cluster add-ons
 	@echo "🗑️ Cleaning up cluster add-ons..."
 	@echo "Uninstalling Prometheus..."
-	@helm uninstall prometheus -n monitoring || echo "No Prometheus installation found"
+	@helm uninstall prometheus -n monitoring 2>/dev/null || echo "No Prometheus installation found"
 	@echo "Uninstalling Cluster Autoscaler..."
-	@helm uninstall cluster-autoscaler -n kube-system || echo "No Cluster Autoscaler installation found"
+	@helm uninstall cluster-autoscaler -n kube-system 2>/dev/null || echo "No Cluster Autoscaler installation found"
 	@echo "Uninstalling AWS Load Balancer Controller..."
-	@helm uninstall aws-load-balancer-controller -n kube-system || echo "No AWS Load Balancer Controller installation found"
+	@helm uninstall aws-load-balancer-controller -n kube-system 2>/dev/null || echo "No AWS Load Balancer Controller installation found"
 	@echo "✅ Add-ons cleanup completed"
+
+cleanup-external: ## Clean up external AWS resources (Load Balancers, Security Groups, etc.)
+	@echo "🗑️ Cleaning up external AWS resources..."
+	@chmod +x scripts/destroy.sh
+	@CLUSTER_NAME=$${CLUSTER_NAME:-eks-cluster} AWS_REGION=$${AWS_REGION:-eu-west-1} bash -c 'source scripts/destroy.sh && cleanup_external_resources'

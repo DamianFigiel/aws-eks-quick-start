@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "cluster_name" {
   description = "Name of the EKS cluster"
   type        = string
-  default     = "phylax-rollup"
+  default     = "eks-cluster"
 }
 
 variable "cluster_version" {
@@ -45,7 +45,7 @@ variable "common_tags" {
   type        = map(string)
   default = {
     Environment = "production"
-    Project     = "phylax-rollup"
+    Project     = "eks-cluster"
     ManagedBy   = "terraform"
   }
 }

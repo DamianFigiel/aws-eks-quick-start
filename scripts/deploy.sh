@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Starting Phylax Rollup Infrastructure Deployment"
+echo "🚀 Starting AWS EKS Cluster Deployment"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 AWS_REGION=${AWS_REGION:-eu-west-1}
-CLUSTER_NAME=${CLUSTER_NAME:-phylax-rollup}
+CLUSTER_NAME=${CLUSTER_NAME:-eks-cluster}
 DEPLOY_K8S_ONLY=${DEPLOY_K8S_ONLY:-false}
 
 check_dependencies() {
@@ -155,105 +155,41 @@ deploy_addons() {
     echo "✅ Add-ons deployment completed"
 }
 
-deploy_kubernetes() {
-    echo "☸️ Deploying Kubernetes resources..."
-    
-    # Add support for genesis-ssz.yaml
-    echo "📦 Creating namespaces..."
-    kubectl apply -f "$PROJECT_ROOT/k8s/namespaces.yaml"
-    
-    echo "📦 Creating ConfigMaps and Secrets..."
-    kubectl apply -f "$PROJECT_ROOT/k8s/configmaps.yaml"
-    
-    echo "📦 Creating Persistent Volume Claims..."
-    kubectl apply -f "$PROJECT_ROOT/k8s/persistent-volumes.yaml"
-    
-    echo "📦 Deploying Ethereum infrastructure..."
-    kubectl apply -f "$PROJECT_ROOT/k8s/ethereum-execution.yaml"
-    kubectl apply -f "$PROJECT_ROOT/k8s/ethereum-beacon.yaml"
-    
-    echo "⏳ Waiting for Ethereum nodes to be ready..."
-    kubectl wait --for=condition=ready pod -l app=execution-client -n ethereum --timeout=600s
-    
-    echo "📦 Deploying Rollup infrastructure..."
-    kubectl apply -f "$PROJECT_ROOT/k8s/op-geth.yaml"
-    kubectl apply -f "$PROJECT_ROOT/k8s/op-node.yaml"
-    
-    echo "📦 Deploying monitoring..."
-    kubectl apply -f "$PROJECT_ROOT/k8s/monitoring.yaml"
-    
-    echo "✅ Kubernetes resources deployed successfully"
-}
-
-wait_for_services() {
-    echo "⏳ Waiting for services to be ready..."
-    
-    echo "⏳ Waiting for OP-Geth..."
-    kubectl wait --for=condition=ready pod -l app=op-geth -n rollup --timeout=600s
-    
-    echo "⏳ Waiting for OP-Node..."
-    kubectl wait --for=condition=ready pod -l app=op-node -n rollup --timeout=600s
-    
-    echo "✅ All services are ready"
-}
-
-get_service_info() {
-    echo "📊 Getting service information..."
-    
-    echo "🔗 LoadBalancer Services:"
-    kubectl get svc -n rollup op-geth-external
-    
-    echo "🔗 Internal Services:"
-    kubectl get svc -n rollup
-    kubectl get svc -n ethereum
-    
-    echo "📊 Pod Status:"
-    kubectl get pods -n rollup
-    kubectl get pods -n ethereum
-    
-    if kubectl get svc -n monitoring prometheus-grafana &> /dev/null; then
-        echo "📊 Monitoring:"
-        kubectl get svc -n monitoring
-        echo "📊 Grafana admin password: admin"
-    fi
-}
-
 main() {
     check_dependencies
     
     if [ "$DEPLOY_K8S_ONLY" = "true" ]; then
-        echo "🚀 Running Kubernetes-only deployment"
+        echo "🚀 Running add-ons only deployment"
         # Skip AWS and Terraform but ensure kubectl is configured correctly
         if ! kubectl get nodes &>/dev/null; then
             echo "❌ Cannot connect to Kubernetes cluster. Please check your kubeconfig."
             exit 1
         fi
         
-        deploy_kubernetes
-        wait_for_services
-        get_service_info
+        deploy_addons
     else
         check_aws_credentials
         deploy_terraform
         deploy_addons
-        deploy_kubernetes
-        wait_for_services
-        get_service_info
     fi
     
     echo ""
-    echo "🎉 Phylax Rollup Infrastructure deployment completed successfully!"
+    echo "🎉 AWS EKS Cluster deployment completed successfully!"
     echo ""
     echo "📋 Next steps:"
-    echo "1. Access your rollup RPC at the LoadBalancer endpoint"
-    echo "2. Monitor your infrastructure using Grafana"
-    echo "3. Check logs with: kubectl logs -f <pod-name> -n <namespace>"
+    echo "1. Your EKS cluster is ready for use"
+    echo "2. Cluster autoscaler is configured to scale nodes automatically"
+    echo "3. AWS Load Balancer Controller is ready for LoadBalancer services"
+    echo "4. Monitoring stack (Prometheus/Grafana) is deployed"
     echo ""
     echo "🔧 Useful commands:"
-    echo "kubectl get pods -n rollup"
-    echo "kubectl get pods -n ethereum"
-    echo "kubectl logs -f deployment/op-geth -n rollup"
-    echo "kubectl logs -f deployment/op-node -n rollup"
+    echo "kubectl get nodes"
+    echo "kubectl get pods -A"
+    echo "kubectl get svc -A"
+    echo ""
+    echo "📊 Access Grafana:"
+    echo "kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80"
+    echo "Then visit http://localhost:3000 (admin/admin)"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

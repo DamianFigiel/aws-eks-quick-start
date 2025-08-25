@@ -1,21 +1,31 @@
-aws_region = "eu-west-1"
-cluster_name = "phylax-rollup"
+# AWS Region for deployment
+aws_region      = "eu-west-1"
+
+# EKS Cluster Configuration
+cluster_name    = "my-eks-cluster"
 cluster_version = "1.33"
 
-node_group_instance_types = ["m6i.xlarge", "m5.xlarge", "m5n.xlarge"]
-min_size = 2
-max_size = 10
-desired_size = 3
+# Node Group Configuration
+# Instance types for worker nodes (you can specify multiple for mixed instance policy)
+node_group_instance_types = ["m6i.xlarge"]
 
+# Auto-scaling configuration
+min_size                  = 2    # Minimum number of nodes
+max_size                  = 10   # Maximum number of nodes
+desired_size              = 3    # Initial number of nodes
+
+# Resource tagging
 common_tags = {
-  Environment = "production"
-  Project     = "phylax-rollup"
-  ManagedBy   = "terraform"
-  Owner       = "platform-team"
+  Environment = "production"    # Environment tag (dev, staging, production)
+  Project     = "my-project"    # Project name
+  ManagedBy   = "terraform"     # Infrastructure management tool
+  Owner       = "platform-team" # Team responsible for the infrastructure
 }
 
-enable_irsa = true
-enable_cluster_autoscaler = true
-enable_aws_load_balancer_controller = true
-enable_ebs_csi_driver = true
-enable_monitoring = true
+# Add-ons Configuration
+# Enable/disable various EKS add-ons and components
+enable_irsa                         = true  # IAM Roles for Service Accounts
+enable_cluster_autoscaler           = true  # Auto-scaling of node groups
+enable_aws_load_balancer_controller = true  # AWS Load Balancer Controller
+enable_ebs_csi_driver               = true  # EBS CSI Driver for persistent volumes
+enable_monitoring                   = true  # Prometheus + Grafana monitoring stack
