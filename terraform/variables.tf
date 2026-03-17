@@ -79,3 +79,21 @@ variable "enable_monitoring" {
   type        = bool
   default     = true
 }
+
+variable "enable_fargate" {
+  description = "Enable Fargate profiles for serverless pod execution"
+  type        = bool
+  default     = false
+}
+
+variable "fargate_namespaces" {
+  description = "Namespaces to create Fargate profiles for"
+  type        = list(string)
+  default     = ["default", "kube-system"]
+}
+
+variable "enable_cloudwatch_observability" {
+  description = "Enable CloudWatch Observability add-on (Container Insights metrics + Fluent Bit pod logs)"
+  type        = bool
+  default     = true
+}

@@ -1,14 +1,31 @@
 #!/bin/bash
 set -e
+export AWS_PAGER=""
 
 echo "🚀 Starting AWS EKS Cluster Deployment"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+if [ -f "$PROJECT_ROOT/.env" ]; then
+  set -a
+  source "$PROJECT_ROOT/.env"
+  set +a
+fi
+
 AWS_REGION=${AWS_REGION:-eu-west-1}
 CLUSTER_NAME=${CLUSTER_NAME:-eks-cluster}
 DEPLOY_K8S_ONLY=${DEPLOY_K8S_ONLY:-false}
+AWS_PROFILE_NAME=${AWS_PROFILE_NAME:-${CLUSTER_NAME}}
+
+setup_aws_profile() {
+    echo "🔧 Configuring AWS CLI profile '${AWS_PROFILE_NAME}'..."
+    aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID" --profile "$AWS_PROFILE_NAME"
+    aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" --profile "$AWS_PROFILE_NAME"
+    aws configure set region "$AWS_REGION" --profile "$AWS_PROFILE_NAME"
+    export AWS_PROFILE="$AWS_PROFILE_NAME"
+    echo "✅ AWS CLI profile '${AWS_PROFILE_NAME}' configured"
+}
 
 check_dependencies() {
     echo "🔍 Checking dependencies..."
@@ -39,8 +56,12 @@ check_dependencies() {
 check_aws_credentials() {
     echo "🔍 Checking AWS credentials..."
     
+    if [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+        setup_aws_profile
+    fi
+
     if ! aws sts get-caller-identity &> /dev/null; then
-        echo "❌ AWS credentials are not configured. Please run 'aws configure'."
+        echo "❌ AWS credentials are not configured. Please check your .env file."
         exit 1
     fi
     
@@ -58,27 +79,12 @@ deploy_terraform() {
     echo "📋 Planning Terraform deployment..."
     terraform plan -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME"
     
-    echo "🚀 Step 1: Creating EKS cluster infrastructure..."
-    terraform apply -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME" -auto-approve \
-        -target=module.vpc \
-        -target=module.eks \
-        -target=aws_iam_role.cluster_autoscaler \
-        -target=aws_iam_policy.cluster_autoscaler \
-        -target=aws_iam_role_policy_attachment.cluster_autoscaler \
-        -target=aws_iam_role.aws_load_balancer_controller \
-        -target=aws_iam_policy.aws_load_balancer_controller \
-        -target=aws_iam_role_policy_attachment.aws_load_balancer_controller \
-        -target=aws_iam_role.ebs_csi_driver \
-        -target=aws_iam_role_policy_attachment.ebs_csi_driver \
-        -target=aws_eks_access_entry.current_user \
-        -target=aws_eks_access_policy_association.current_user_admin \
-        -target=aws_eks_access_policy_association.current_user_cluster_admin
+    echo "🚀 Applying Terraform configuration..."
+    terraform apply -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME" -auto-approve
     
     echo "⏳ Waiting for EKS cluster to be fully ready..."
-    # Get the cluster name
     CLUSTER_NAME_FULL=$(terraform output -raw cluster_name 2>/dev/null || echo "$CLUSTER_NAME")
     
-    # Wait for the cluster to be ACTIVE
     while true; do
         status=$(aws eks describe-cluster --name "$CLUSTER_NAME_FULL" --region "$AWS_REGION" --query "cluster.status" --output text 2>/dev/null || echo "NOT_FOUND")
         
@@ -91,14 +97,11 @@ deploy_terraform() {
         fi
     done
     
-    # Update kubeconfig
     echo "🔧 Updating kubeconfig..."
-    aws eks update-kubeconfig --name "$CLUSTER_NAME_FULL" --region "$AWS_REGION"
+    aws eks update-kubeconfig --name "$CLUSTER_NAME_FULL" --region "$AWS_REGION" --profile "$AWS_PROFILE_NAME"
     
-    # EKS Access Entries are now managed via Terraform in cluster-auth.tf
     echo "✅ Cluster access is managed via EKS Access Entries in Terraform"
     
-    # Test cluster connectivity
     echo "🔍 Testing cluster connectivity..."
     for i in {1..5}; do
         if kubectl get nodes >/dev/null 2>&1; then
@@ -108,24 +111,16 @@ deploy_terraform() {
             echo "⏳ Waiting for cluster API to be ready... (attempt $i/5)"
             sleep 10
             
-            # If we're on the last attempt and still failing
             if [ $i -eq 5 ]; then
                 echo "⚠️ Still facing connectivity issues. Verifying EKS Access Entries..."
-                
-                # Describe the cluster access entries
                 aws eks list-access-entries --cluster-name "$CLUSTER_NAME_FULL" --region "$AWS_REGION"
-                
-                # Get the current caller identity
                 CALLER_IDENTITY=$(aws sts get-caller-identity --query "Arn" --output text)
                 echo "🔍 Current identity: $CALLER_IDENTITY"
-                
                 echo "⚠️ You may need to run terraform apply again to ensure access entries are properly configured."
-                echo "⚠️ Check that your IAM user or role has proper permissions to access the EKS cluster."
             fi
         fi
     done
     
-    # Additional wait to ensure all controllers are ready
     echo "⏳ Waiting 30 seconds for all cluster controllers to be ready..."
     sleep 30
     
@@ -143,7 +138,6 @@ deploy_terraform() {
 deploy_addons() {
     echo "🚀 Deploying cluster add-ons (AWS Load Balancer Controller, Cluster Autoscaler, Prometheus)..."
     
-    # Get IAM role ARNs from Terraform outputs
     cd "$PROJECT_ROOT/terraform"
     AWS_LB_CONTROLLER_ROLE_ARN=$(terraform output -raw aws_load_balancer_controller_role_arn)
     CLUSTER_AUTOSCALER_ROLE_ARN=$(terraform output -raw cluster_autoscaler_role_arn)
@@ -155,12 +149,19 @@ deploy_addons() {
     echo "✅ Add-ons deployment completed"
 }
 
+run_verification() {
+    echo ""
+    echo "🔍 Running post-deployment verification..."
+    echo ""
+    chmod +x "$PROJECT_ROOT/scripts/verify.sh"
+    "$PROJECT_ROOT/scripts/verify.sh" || true
+}
+
 main() {
     check_dependencies
     
     if [ "$DEPLOY_K8S_ONLY" = "true" ]; then
         echo "🚀 Running add-ons only deployment"
-        # Skip AWS and Terraform but ensure kubectl is configured correctly
         if ! kubectl get nodes &>/dev/null; then
             echo "❌ Cannot connect to Kubernetes cluster. Please check your kubeconfig."
             exit 1
@@ -173,6 +174,8 @@ main() {
         deploy_addons
     fi
     
+    run_verification
+    
     echo ""
     echo "🎉 AWS EKS Cluster deployment completed successfully!"
     echo ""
@@ -181,15 +184,14 @@ main() {
     echo "2. Cluster autoscaler is configured to scale nodes automatically"
     echo "3. AWS Load Balancer Controller is ready for LoadBalancer services"
     echo "4. Monitoring stack (Prometheus/Grafana) is deployed"
+    echo "5. Pod logs and metrics are streaming to CloudWatch"
     echo ""
     echo "🔧 Useful commands:"
-    echo "kubectl get nodes"
-    echo "kubectl get pods -A"
-    echo "kubectl get svc -A"
-    echo ""
-    echo "📊 Access Grafana:"
-    echo "kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80"
-    echo "Then visit http://localhost:3000 (admin/admin)"
+    echo "  kubectl get nodes"
+    echo "  kubectl get pods -A"
+    echo "  make verify        # Re-run verification"
+    echo "  make status         # Show cluster status"
+    echo "  make destroy        # Tear down everything"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

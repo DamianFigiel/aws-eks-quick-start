@@ -1,235 +1,238 @@
 #!/bin/bash
 set -e
+export AWS_PAGER=""
 
 echo "🗑️ Starting AWS EKS Cluster Destruction"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+if [ -f "$PROJECT_ROOT/.env" ]; then
+  set -a
+  source "$PROJECT_ROOT/.env"
+  set +a
+fi
+
+FORCE=false
+for arg in "$@"; do
+  case $arg in
+    --force) FORCE=true ;;
+  esac
+done
+
 AWS_REGION=${AWS_REGION:-eu-west-1}
 CLUSTER_NAME=${CLUSTER_NAME:-eks-cluster}
+AWS_PROFILE_NAME=${AWS_PROFILE_NAME:-${CLUSTER_NAME}}
+
+if [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+    aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID" --profile "$AWS_PROFILE_NAME"
+    aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" --profile "$AWS_PROFILE_NAME"
+    aws configure set region "$AWS_REGION" --profile "$AWS_PROFILE_NAME"
+    export AWS_PROFILE="$AWS_PROFILE_NAME"
+fi
 
 check_dependencies() {
     echo "🔍 Checking dependencies..."
-    
-    if ! command -v terraform &> /dev/null; then
-        echo "❌ Terraform is not installed. Please install Terraform."
-        exit 1
-    fi
-    
-    if ! command -v aws &> /dev/null; then
-        echo "❌ AWS CLI is not installed. Please install AWS CLI."
-        exit 1
-    fi
-    
+    command -v terraform &> /dev/null || { echo "❌ Terraform is not installed."; exit 1; }
+    command -v aws &> /dev/null || { echo "❌ AWS CLI is not installed."; exit 1; }
     echo "✅ All required dependencies are available"
 }
 
 check_aws_credentials() {
     echo "🔍 Checking AWS credentials..."
-    
-    if ! aws sts get-caller-identity &> /dev/null; then
-        echo "❌ AWS credentials are not configured. Please run 'aws configure'."
-        exit 1
-    fi
-    
+    aws sts get-caller-identity &> /dev/null || { echo "❌ AWS credentials are not configured."; exit 1; }
     echo "✅ AWS credentials are configured"
+}
+
+get_vpc_id() {
+    cd "$PROJECT_ROOT/terraform"
+    VPC_ID=$(terraform output -raw vpc_id 2>/dev/null || echo "")
+    cd "$PROJECT_ROOT"
+
+    if [ -z "$VPC_ID" ]; then
+        VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:kubernetes.io/cluster/$CLUSTER_NAME,Values=owned,shared" \
+            --query "Vpcs[0].VpcId" --output text 2>/dev/null || echo "None")
+        [ "$VPC_ID" = "None" ] && VPC_ID=""
+    fi
+
+    echo "$VPC_ID"
 }
 
 cleanup_addons() {
     echo "🗑️ Cleaning up cluster add-ons..."
-    
-    # Check if kubectl is available and cluster is accessible
-    if command -v kubectl &> /dev/null; then
-        if kubectl get nodes &>/dev/null; then
-            echo "🗑️ Uninstalling Helm releases..."
-            
-            # Uninstall Prometheus stack
-            if helm list -n monitoring | grep -q prometheus; then
-                echo "🗑️ Uninstalling Prometheus..."
-                helm uninstall prometheus -n monitoring
+    if command -v kubectl &> /dev/null && kubectl get nodes &>/dev/null; then
+        for release_ns in "prometheus:monitoring" "cluster-autoscaler:kube-system" "aws-load-balancer-controller:kube-system"; do
+            release=$(echo "$release_ns" | cut -d: -f1)
+            ns=$(echo "$release_ns" | cut -d: -f2)
+            if helm list -n "$ns" 2>/dev/null | grep -q "$release"; then
+                echo "  Uninstalling $release..."
+                helm uninstall "$release" -n "$ns" --wait 2>/dev/null || true
             fi
-            
-            # Uninstall Cluster Autoscaler
-            if helm list -n kube-system | grep -q cluster-autoscaler; then
-                echo "🗑️ Uninstalling Cluster Autoscaler..."
-                helm uninstall cluster-autoscaler -n kube-system
-            fi
-            
-            # Uninstall AWS Load Balancer Controller
-            if helm list -n kube-system | grep -q aws-load-balancer-controller; then
-                echo "🗑️ Uninstalling AWS Load Balancer Controller..."
-                helm uninstall aws-load-balancer-controller -n kube-system
-            fi
-            
-            echo "✅ Add-ons cleanup completed"
-        else
-            echo "⚠️ Cannot connect to cluster, skipping add-ons cleanup"
-        fi
+        done
+        echo "✅ Add-ons cleanup completed"
     else
-        echo "⚠️ kubectl not available, skipping add-ons cleanup"
+        echo "⚠️ Cannot connect to cluster, skipping add-ons cleanup"
     fi
 }
 
-cleanup_external_resources() {
-    echo "🗑️ Cleaning up external AWS resources..."
-    
-    # Get cluster name and region from terraform state or variables
-    CLUSTER_NAME_FULL=${CLUSTER_NAME:-eks-cluster}
-    AWS_REGION_FULL=${AWS_REGION:-eu-west-1}
-    
-    # Get VPC ID from terraform state
-    cd "$PROJECT_ROOT/terraform"
-    VPC_ID=$(terraform output -raw vpc_id 2>/dev/null || echo "")
-    cd "$PROJECT_ROOT"
-    
-    if [ -n "$VPC_ID" ]; then
-        echo "🔍 Found VPC: $VPC_ID"
-        
-        # Delete Load Balancers created by AWS Load Balancer Controller
-        echo "🗑️ Cleaning up Load Balancers..."
-        LB_ARNS=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?VpcId=='$VPC_ID'].LoadBalancerArn" --output text 2>/dev/null || echo "")
-        
-        if [ -n "$LB_ARNS" ]; then
-            echo "Found Load Balancers: $LB_ARNS"
-            for LB_ARN in $LB_ARNS; do
-                echo "Deleting Load Balancer: $LB_ARN"
-                aws elbv2 delete-load-balancer --load-balancer-arn "$LB_ARN" 2>/dev/null || echo "Failed to delete LB: $LB_ARN"
-            done
-            
-            # Wait for Load Balancers to be deleted
-            echo "⏳ Waiting for Load Balancers to be deleted..."
-            sleep 30
-        else
-            echo "No Load Balancers found"
-        fi
-        
-        # Delete Security Groups created by AWS Load Balancer Controller
-        echo "🗑️ Cleaning up Security Groups..."
-        SG_IDS=$(aws ec2 describe-security-groups \
-            --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=k8s-*" \
-            --query "SecurityGroups[?GroupName!='default'].GroupId" \
-            --output text 2>/dev/null || echo "")
-        
-        if [ -n "$SG_IDS" ]; then
-            echo "Found Security Groups: $SG_IDS"
-            for SG_ID in $SG_IDS; do
-                echo "Cleaning up Security Group: $SG_ID"
-                
-                # Remove all ingress rules
-                INGRESS_RULES=$(aws ec2 describe-security-groups --group-ids "$SG_ID" \
-                    --query "SecurityGroups[0].IpPermissions" --output json 2>/dev/null || echo "[]")
-                
-                if [ "$INGRESS_RULES" != "[]" ]; then
-                    echo "Removing ingress rules from $SG_ID"
-                    aws ec2 revoke-security-group-ingress --group-id "$SG_ID" --ip-permissions "$INGRESS_RULES" 2>/dev/null || echo "Failed to remove ingress rules"
-                fi
-                
-                # Remove all egress rules (except default)
-                EGRESS_RULES=$(aws ec2 describe-security-groups --group-ids "$SG_ID" \
-                    --query "SecurityGroups[0].IpPermissionsEgress[?IpProtocol!='-1']" --output json 2>/dev/null || echo "[]")
-                
-                if [ "$EGRESS_RULES" != "[]" ]; then
-                    echo "Removing egress rules from $SG_ID"
-                    aws ec2 revoke-security-group-egress --group-id "$SG_ID" --ip-permissions "$EGRESS_RULES" 2>/dev/null || echo "Failed to remove egress rules"
-                fi
-                
-                # Delete the security group
-                echo "Deleting Security Group: $SG_ID"
-                aws ec2 delete-security-group --group-id "$SG_ID" 2>/dev/null || echo "Failed to delete SG: $SG_ID"
-            done
-        else
-            echo "No external Security Groups found"
-        fi
-        
-        # Delete Network Interfaces that might be left
-        echo "🗑️ Cleaning up Network Interfaces..."
-        ENI_IDS=$(aws ec2 describe-network-interfaces \
-            --filters "Name=vpc-id,Values=$VPC_ID" "Name=status,Values=available" \
-            --query "NetworkInterfaces[?Description=='ELB *' || Description=='AWS Load Balancer *'].NetworkInterfaceId" \
-            --output text 2>/dev/null || echo "")
-        
-        if [ -n "$ENI_IDS" ]; then
-            echo "Found Network Interfaces: $ENI_IDS"
-            for ENI_ID in $ENI_IDS; do
-                echo "Deleting Network Interface: $ENI_ID"
-                aws ec2 delete-network-interface --network-interface-id "$ENI_ID" 2>/dev/null || echo "Failed to delete ENI: $ENI_ID"
-            done
-        else
-            echo "No external Network Interfaces found"
-        fi
-        
-        echo "✅ External resources cleanup completed"
-    else
-        echo "⚠️ Could not determine VPC ID, trying to find VPC by cluster name..."
-        cleanup_by_cluster_name
-    fi
-}
+cleanup_vpc_dependencies() {
+    local vpc_id=$1
+    [ -z "$vpc_id" ] && return
 
-cleanup_by_cluster_name() {
-    echo "🔍 Searching for VPC by cluster name: $CLUSTER_NAME_FULL"
-    
-    # Try to find VPC by cluster name in tags
-    VPC_ID=$(aws ec2 describe-vpcs \
-        --filters "Name=tag:kubernetes.io/cluster/$CLUSTER_NAME_FULL,Values=owned" \
-        --query "Vpcs[0].VpcId" --output text 2>/dev/null || echo "")
-    
-    if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
-        echo "🔍 Found VPC by cluster tag: $VPC_ID"
-        # Recursively call cleanup with the found VPC ID
-        VPC_ID_FOUND="$VPC_ID"
-        cleanup_external_resources
-    else
-        echo "⚠️ Could not find VPC by cluster name, skipping external resources cleanup"
+    echo "🗑️ Cleaning up all VPC dependencies for $vpc_id..."
+
+    echo "  Deleting load balancers..."
+    LB_ARNS=$(aws elbv2 describe-load-balancers \
+        --query "LoadBalancers[?VpcId=='$vpc_id'].LoadBalancerArn" \
+        --output text 2>/dev/null || echo "")
+    for arn in $LB_ARNS; do
+        echo "    Deleting ALB/NLB: $arn"
+        aws elbv2 delete-load-balancer --load-balancer-arn "$arn" 2>/dev/null || true
+    done
+
+    CLB_NAMES=$(aws elb describe-load-balancers \
+        --query "LoadBalancerDescriptions[?VPCId=='$vpc_id'].LoadBalancerName" \
+        --output text 2>/dev/null || echo "")
+    for name in $CLB_NAMES; do
+        echo "    Deleting CLB: $name"
+        aws elb delete-load-balancer --load-balancer-name "$name" 2>/dev/null || true
+    done
+
+    if [ -n "$LB_ARNS" ] || [ -n "$CLB_NAMES" ]; then
+        echo "  ⏳ Waiting 30s for load balancers to release ENIs..."
+        sleep 30
     fi
+
+    echo "  Detaching and deleting ENIs..."
+    ALL_ENI_IDS=$(aws ec2 describe-network-interfaces \
+        --filters "Name=vpc-id,Values=$vpc_id" \
+        --query "NetworkInterfaces[].NetworkInterfaceId" \
+        --output text 2>/dev/null || echo "")
+    for eni_id in $ALL_ENI_IDS; do
+        ENI_STATUS=$(aws ec2 describe-network-interfaces \
+            --network-interface-ids "$eni_id" \
+            --query "NetworkInterfaces[0].Status" \
+            --output text 2>/dev/null || echo "gone")
+        [ "$ENI_STATUS" = "gone" ] && continue
+
+        if [ "$ENI_STATUS" = "in-use" ]; then
+            ATTACH_ID=$(aws ec2 describe-network-interfaces \
+                --network-interface-ids "$eni_id" \
+                --query "NetworkInterfaces[0].Attachment.AttachmentId" \
+                --output text 2>/dev/null || echo "")
+            if [ -n "$ATTACH_ID" ] && [ "$ATTACH_ID" != "None" ]; then
+                echo "    Detaching ENI $eni_id ($ATTACH_ID)..."
+                aws ec2 detach-network-interface --attachment-id "$ATTACH_ID" --force 2>/dev/null || true
+            fi
+        fi
+    done
+
+    if [ -n "$ALL_ENI_IDS" ]; then
+        echo "  ⏳ Waiting 15s for ENIs to detach..."
+        sleep 15
+    fi
+
+    for eni_id in $ALL_ENI_IDS; do
+        aws ec2 delete-network-interface --network-interface-id "$eni_id" 2>/dev/null || true
+    done
+
+    echo "  Deleting non-default security groups..."
+    SG_IDS=$(aws ec2 describe-security-groups \
+        --filters "Name=vpc-id,Values=$vpc_id" \
+        --query "SecurityGroups[?GroupName!='default'].GroupId" \
+        --output text 2>/dev/null || echo "")
+    for sg_id in $SG_IDS; do
+        INGRESS=$(aws ec2 describe-security-groups --group-ids "$sg_id" \
+            --query "SecurityGroups[0].IpPermissions" --output json 2>/dev/null || echo "[]")
+        [ "$INGRESS" != "[]" ] && \
+            aws ec2 revoke-security-group-ingress --group-id "$sg_id" --ip-permissions "$INGRESS" 2>/dev/null || true
+
+        EGRESS=$(aws ec2 describe-security-groups --group-ids "$sg_id" \
+            --query "SecurityGroups[0].IpPermissionsEgress" --output json 2>/dev/null || echo "[]")
+        [ "$EGRESS" != "[]" ] && \
+            aws ec2 revoke-security-group-egress --group-id "$sg_id" --ip-permissions "$EGRESS" 2>/dev/null || true
+    done
+    for sg_id in $SG_IDS; do
+        aws ec2 delete-security-group --group-id "$sg_id" 2>/dev/null || true
+    done
+
+    echo "✅ VPC dependency cleanup completed"
 }
 
 destroy_terraform() {
-    echo "🗑️ Destroying Terraform infrastructure..."
-    
     cd "$PROJECT_ROOT/terraform"
-    
+
     echo "📋 Planning Terraform destruction..."
     terraform plan -destroy -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME"
-    
+
     echo "⚠️ This will destroy all AWS resources including the EKS cluster."
     echo "⚠️ This action cannot be undone!"
-    read -p "Are you sure you want to continue? (yes/no): " confirm
-    
-    if [ "$confirm" = "yes" ]; then
-        echo "🗑️ Destroying infrastructure..."
-        terraform destroy -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME" -auto-approve
-        
+
+    if [ "$FORCE" = "true" ]; then
+        echo "🔧 --force flag detected, skipping confirmation"
+    else
+        read -p "Are you sure you want to continue? (yes/no): " confirm
+        if [ "$confirm" != "yes" ]; then
+            echo "❌ Destruction cancelled"
+            exit 1
+        fi
+    fi
+
+    echo "🗑️ Destroying infrastructure..."
+    if terraform destroy -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME" -auto-approve; then
         echo "✅ Terraform destruction completed"
     else
-        echo "❌ Destruction cancelled"
-        exit 1
+        echo "⚠️ Terraform destroy failed (likely VPC dependency issue). Cleaning up and retrying..."
+
+        local vpc_id
+        vpc_id=$(get_vpc_id)
+        if [ -n "$vpc_id" ]; then
+            cleanup_vpc_dependencies "$vpc_id"
+            echo "🔄 Retrying terraform destroy..."
+            terraform destroy -var="aws_region=$AWS_REGION" -var="cluster_name=$CLUSTER_NAME" -auto-approve
+            echo "✅ Terraform destruction completed on retry"
+        else
+            echo "❌ Could not determine VPC ID for cleanup. Manual intervention needed."
+            exit 1
+        fi
     fi
-    
+
     cd "$PROJECT_ROOT"
 }
 
 main() {
     check_dependencies
     check_aws_credentials
-    
+
     echo "⚠️ Starting destruction process for cluster: $CLUSTER_NAME in region: $AWS_REGION"
-    
+
+    local vpc_id
+    vpc_id=$(get_vpc_id)
+
     cleanup_addons
-    cleanup_external_resources
+
+    if [ -n "$vpc_id" ]; then
+        cleanup_vpc_dependencies "$vpc_id"
+    fi
+
     destroy_terraform
-    
+
+    echo "🔧 Removing cluster from local kubeconfig..."
+    CONTEXT="arn:aws:eks:${AWS_REGION}:$(aws sts get-caller-identity --query Account --output text 2>/dev/null):cluster/${CLUSTER_NAME}"
+    kubectl config unset "users.${CONTEXT}" 2>/dev/null || true
+    kubectl config unset "clusters.${CONTEXT}" 2>/dev/null || true
+    kubectl config delete-context "${CONTEXT}" 2>/dev/null || true
+    echo "✅ Cluster removed from kubeconfig"
+
+    echo "🔧 Removing AWS CLI profile '${AWS_PROFILE_NAME}'..."
+    aws configure set aws_access_key_id "" --profile "$AWS_PROFILE_NAME" 2>/dev/null || true
+    aws configure set aws_secret_access_key "" --profile "$AWS_PROFILE_NAME" 2>/dev/null || true
+    rm -f ~/.aws/cli/cache/*"$AWS_PROFILE_NAME"* 2>/dev/null || true
+    echo "✅ AWS CLI profile cleaned up"
+
     echo ""
     echo "🎉 AWS EKS Cluster destruction completed successfully!"
-    echo ""
-    echo "📋 What was destroyed:"
-    echo "1. EKS cluster and all node groups"
-    echo "2. VPC and networking resources"
-    echo "3. IAM roles and policies"
-    echo "4. All cluster add-ons (Prometheus, Cluster Autoscaler, Load Balancer Controller)"
-    echo ""
-    echo "⚠️ Note: Any persistent volumes created outside of this Terraform configuration"
-    echo "   may still exist and need to be manually cleaned up."
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

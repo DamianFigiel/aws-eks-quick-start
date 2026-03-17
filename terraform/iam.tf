@@ -285,9 +285,9 @@ resource "aws_iam_policy" "ec2_volume_operations" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid       = "VisualEditor0"
-        Effect    = "Allow"
-        Action    = [
+        Sid    = "VisualEditor0"
+        Effect = "Allow"
+        Action = [
           "ec2:CreateTags",
           "ec2:CreateVolume",
           "ec2:AttachVolume"

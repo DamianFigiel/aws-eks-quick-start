@@ -29,3 +29,8 @@ enable_cluster_autoscaler           = true  # Auto-scaling of node groups
 enable_aws_load_balancer_controller = true  # AWS Load Balancer Controller
 enable_ebs_csi_driver               = true  # EBS CSI Driver for persistent volumes
 enable_monitoring                   = true  # Prometheus + Grafana monitoring stack
+enable_cloudwatch_observability     = true  # CloudWatch Container Insights + Fluent Bit pod logs
+
+# Fargate Configuration (optional)
+enable_fargate     = false                       # Enable Fargate profiles
+fargate_namespaces = ["default", "kube-system"]  # Namespaces for Fargate profiles

@@ -3,7 +3,7 @@ resource "aws_eks_access_entry" "current_user" {
   cluster_name  = module.eks.cluster_name
   principal_arn = data.aws_caller_identity.current.arn
   type          = "STANDARD"
-  
+
   depends_on = [module.eks]
 }
 

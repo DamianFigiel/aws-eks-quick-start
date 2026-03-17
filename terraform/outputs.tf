@@ -68,6 +68,16 @@ output "ebs_csi_driver_role_arn" {
   value       = aws_iam_role.ebs_csi_driver.arn
 }
 
+output "cloudwatch_observability_role_arn" {
+  description = "ARN of the CloudWatch Observability IAM role"
+  value       = aws_iam_role.cloudwatch_observability.arn
+}
+
+output "cloudwatch_log_group_name" {
+  description = "CloudWatch log group for container logs"
+  value       = var.enable_cloudwatch_observability ? aws_cloudwatch_log_group.containers[0].name : ""
+}
+
 output "grafana_admin_password" {
   description = "Grafana admin password"
   value       = "admin"

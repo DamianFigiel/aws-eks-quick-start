@@ -26,19 +26,19 @@ provider "aws" {
 
 # Data sources for EKS authentication
 data "aws_eks_cluster" "cluster" {
-  name = module.eks.cluster_name
+  name       = module.eks.cluster_name
   depends_on = [module.eks]
 }
 
 data "aws_eks_cluster_auth" "cluster" {
-  name = module.eks.cluster_name
+  name       = module.eks.cluster_name
   depends_on = [module.eks]
 }
 
 provider "kubernetes" {
   host                   = data.aws_eks_cluster.cluster.endpoint
   cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data)
-  
+
   exec {
     api_version = "client.authentication.k8s.io/v1beta1"
     command     = "aws"
@@ -70,6 +70,6 @@ locals {
   azs      = slice(data.aws_availability_zones.available.names, 0, 3)
 
   tags = merge(var.common_tags, {
-    Blueprint  = local.name
+    Blueprint = local.name
   })
 }

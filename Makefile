@@ -1,10 +1,10 @@
-.PHONY: help install deploy deploy-addons destroy status logs clean
+.PHONY: help install deploy deploy-addons destroy verify test status logs clean
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Targets:'
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 install-check: ## Check if required dependencies are installed
 	@echo "🔧 Checking dependencies..."
@@ -34,10 +34,16 @@ deploy-addons: ## Deploy only cluster add-ons (assumes cluster exists)
 	@chmod +x scripts/deploy.sh
 	@DEPLOY_K8S_ONLY=true ./scripts/deploy.sh
 
-destroy: ## Destroy all infrastructure
+destroy: ## Destroy all infrastructure (use FORCE=true to skip confirmation)
 	@echo "🗑️ Destroying infrastructure..."
 	@chmod +x scripts/destroy.sh
-	@./scripts/destroy.sh
+	@./scripts/destroy.sh $(if $(filter true,$(FORCE)),--force)
+
+verify: ## Verify cluster health, CloudWatch logs, and metrics
+	@chmod +x scripts/verify.sh
+	@./scripts/verify.sh
+
+test: verify ## Alias for verify
 
 status: ## Show status of all components
 	@echo "📊 Checking infrastructure status..."
