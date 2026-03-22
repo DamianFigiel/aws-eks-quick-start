@@ -97,3 +97,9 @@ variable "enable_cloudwatch_observability" {
   type        = bool
   default     = true
 }
+
+variable "node_group_disk_size" {
+  description = "Disk size for the EKS node group"
+  type        = number
+  default     = 100
+}

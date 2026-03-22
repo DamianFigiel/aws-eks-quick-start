@@ -61,7 +61,7 @@ module "eks" {
       force_update_version       = false
       use_custom_launch_template = false
 
-      disk_size = 100
+      disk_size = var.node_group_disk_size
       disk_type = "gp3"
 
       create_iam_role          = true
